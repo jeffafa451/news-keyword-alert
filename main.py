@@ -16,7 +16,7 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-LOOKBACK_MINUTES = 120
+LOOKBACK_MINUTES = 10
 MAX_ALERTS = 5
 
 
@@ -57,7 +57,6 @@ def send_telegram_message(text: str):
 
 
 def parse_entry_datetime(entry):
-    # 1순위: published / updated 문자열 파싱
     for field in ("published", "updated"):
         value = entry.get(field)
         if value:
@@ -69,7 +68,6 @@ def parse_entry_datetime(entry):
             except Exception:
                 pass
 
-    # 2순위: feedparser의 struct_time 사용
     for field in ("published_parsed", "updated_parsed"):
         value = entry.get(field)
         if value:
@@ -81,13 +79,22 @@ def parse_entry_datetime(entry):
     return None
 
 
-def build_message(item):
+def build_news_message(item):
     published_text = item["published_dt"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return (
-        f"🔔 신규 기사 발견\n\n"
+        f"🔔 이재용 신규 기사 발견\n\n"
         f"제목: {item['title']}\n"
         f"시각: {published_text}\n"
         f"링크: {item['link']}"
+    )
+
+
+def build_empty_message(now_utc):
+    checked_text = now_utc.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"ℹ️ 이재용 뉴스 점검 완료\n\n"
+        f"최근 {LOOKBACK_MINUTES}분 내 신규 기사 없음\n"
+        f"점검 시각: {checked_text}"
     )
 
 
@@ -133,10 +140,8 @@ def main():
                 }
             )
 
-    # 최신순 정렬
     candidates.sort(key=lambda x: x["published_dt"], reverse=True)
 
-    # 동일 링크 중복 제거 후 상위 5개만
     selected = []
     selected_links = set()
 
@@ -148,12 +153,15 @@ def main():
         if len(selected) >= MAX_ALERTS:
             break
 
-    for item in selected:
-        send_telegram_message(build_message(item))
-        new_seen.add(item["link"])
+    if selected:
+        for item in selected:
+            send_telegram_message(build_news_message(item))
+            new_seen.add(item["link"])
+    else:
+        send_telegram_message(build_empty_message(now_utc))
 
     save_seen_links(new_seen)
-    print(f"Done. Sent {len(selected)} alerts.")
+    print(f"Done. Sent {len(selected)} news alerts.")
 
 
 if __name__ == "__main__":
