@@ -1,5 +1,7 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import feedparser
@@ -7,13 +9,15 @@ import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 FEEDS_FILE = BASE_DIR / "feeds.txt"
-KEYWORDS_FILE = BASE_DIR / "keywords.txt"
 SEEN_FILE = BASE_DIR / "seen_links.json"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+LOOKBACK_MINUTES = 10
+MAX_ALERTS = 5
 
 
 def load_lines(path: Path):
@@ -52,66 +56,104 @@ def send_telegram_message(text: str):
     response.raise_for_status()
 
 
-def matches_keywords(text: str, keywords):
-    lowered = text.lower()
-    return [kw for kw in keywords if kw.lower() in lowered]
+def parse_entry_datetime(entry):
+    # 1순위: published / updated 문자열 파싱
+    for field in ("published", "updated"):
+        value = entry.get(field)
+        if value:
+            try:
+                dt = parsedate_to_datetime(value)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
+            except Exception:
+                pass
+
+    # 2순위: feedparser의 struct_time 사용
+    for field in ("published_parsed", "updated_parsed"):
+        value = entry.get(field)
+        if value:
+            try:
+                return datetime(*value[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+    return None
+
+
+def build_message(item):
+    published_text = item["published_dt"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"🔔 신규 기사 발견\n\n"
+        f"제목: {item['title']}\n"
+        f"시각: {published_text}\n"
+        f"링크: {item['link']}"
+    )
 
 
 def main():
     feeds = load_lines(FEEDS_FILE)
-    keywords = load_lines(KEYWORDS_FILE)
     seen_links = load_seen_links()
 
     if not feeds:
         print("No feeds found.")
         return
 
-    if not keywords:
-        print("No keywords found.")
-        return
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(minutes=LOOKBACK_MINUTES)
 
+    candidates = []
     new_seen = set(seen_links)
-    alerts = []
 
     for feed_url in feeds:
         feed = feedparser.parse(feed_url)
 
         for entry in feed.entries:
             title = entry.get("title", "").strip()
-            summary = entry.get("summary", "").strip()
             link = entry.get("link", "").strip()
-            published = entry.get("published", "").strip()
 
-            if not link or link in seen_links:
+            if not title or not link:
                 continue
 
-            haystack = f"{title}\n{summary}"
-            matched = matches_keywords(haystack, keywords)
+            if link in seen_links:
+                continue
 
-            if matched:
-                alerts.append(
-                    {
-                        "title": title,
-                        "link": link,
-                        "published": published,
-                        "matched": matched,
-                    }
-                )
+            published_dt = parse_entry_datetime(entry)
+            if published_dt is None:
+                continue
 
-            new_seen.add(link)
+            if published_dt < cutoff:
+                continue
 
-    for item in alerts:
-        msg = (
-            f"🔔 키워드 기사 발견\n\n"
-            f"키워드: {', '.join(item['matched'])}\n"
-            f"제목: {item['title']}\n"
-            f"일시: {item['published']}\n"
-            f"링크: {item['link']}"
-        )
-        send_telegram_message(msg)
+            candidates.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "published_dt": published_dt,
+                }
+            )
+
+    # 최신순 정렬
+    candidates.sort(key=lambda x: x["published_dt"], reverse=True)
+
+    # 동일 링크 중복 제거 후 상위 5개만
+    selected = []
+    selected_links = set()
+
+    for item in candidates:
+        if item["link"] in selected_links:
+            continue
+        selected.append(item)
+        selected_links.add(item["link"])
+        if len(selected) >= MAX_ALERTS:
+            break
+
+    for item in selected:
+        send_telegram_message(build_message(item))
+        new_seen.add(item["link"])
 
     save_seen_links(new_seen)
-    print(f"Done. Sent {len(alerts)} alerts.")
+    print(f"Done. Sent {len(selected)} alerts.")
 
 
 if __name__ == "__main__":
