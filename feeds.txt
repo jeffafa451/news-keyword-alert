@@ -1,1 +1,1 @@
-https://news.google.com/rss/search?q=Trump&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&hl=ko&gl=KR&ceid=KR:ko
