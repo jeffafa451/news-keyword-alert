@@ -16,7 +16,7 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-LOOKBACK_MINUTES = 10
+LOOKBACK_MINUTES = 120
 MAX_ALERTS = 5
 
 
